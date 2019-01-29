@@ -48,44 +48,34 @@ class RabbitmqPubSub {
 	_createSubscribeQueueAndConsume () {
 		if (this.createSubscribeQueuePromise) {
 			return this.createSubscribeQueuePromise;
-		} else {
-			this.createSubscribeQueuePromise = new Promise((resolve, reject) => {
-				this._connection
-					.newChannel()
-					.then((channel) => {
-						return channel
-							.assertQueue(this.subscribeQueueName, {
-								exclusive: true,
-								durable: false
-							})
-							.then(({ queue }) => {
-								return channel
-									.bindQueue(queue, this._connection.exchangeName, 'default-pubsub')
-									.then(() => {
-										channel
-											.consume(
-												queue,
-												(message) => {
-													const channelName = message.fields.routingKey;
-													const data = JSON.parse(message.content.toString());
-													this._events.emit(channelName, data);
-												},
-												{
-													noAck: true
-												}
-											)
-											.then(() => {
-												return resolve();
-											});
-									});
-							});
-					})
-					.catch((err) => {
-						return reject(err);
-					});
-			});
-			return this.createSubscribeQueuePromise;
 		}
+
+		return this.createSubscribeQueuePromise = this._connection.newChannel()
+			.then((channel) => {
+				return Promise.all([
+					channel,
+					channel.assertQueue(this.subscribeQueueName, {
+						exclusive: true,
+						durable: false
+					})
+				]);
+			})
+			.then(([channel, { queue }]) => {
+				return Promise.all([
+					channel,
+					queue,
+					channel.bindQueue(queue, this._connection.exchangeName, 'default-pubsub')
+				]);
+			})
+			.then(([channel, queue]) => {
+				channel.consume(queue, (message) => {
+						const channelName = message.fields.routingKey;
+						const data = JSON.parse(message.content.toString());
+						this._events.emit(channelName, data);
+					},
+					{ noAck: true }
+				)
+			});
 	}
 
 	_genSubscriptionId () {
@@ -124,17 +114,19 @@ class RabbitmqPubSub {
 		if (!channelName) {
 			throw new Error('you need to provide a channelName');
 		}
+
 		this._events.on(channelName, callback);
-		return this._createSubscribeQueueAndConsume().then(() => {
-			return this._bindSubscribeQueue(channelName).then(() => {
+		return this._createSubscribeQueueAndConsume()
+			.then(() => this._bindSubscribeQueue(channelName))
+			.then(() => {
 				const subId = this._genSubscriptionId();
 				this._subscription[subId] = {
 					channelName,
 					callback
 				};
+
 				return subId;
 			});
-		});
 	}
 
 	unsubscribeAll (channelName) {
@@ -178,16 +170,9 @@ class RabbitmqPubSub {
 			throw new Error('you need to provide a channelName');
 		}
 
-		return new Promise((resolve, reject) => {
-			return this.publishChannel
-				.then((channel) => {
-					const content = new Buffer(JSON.stringify(data));
-					channel.publish(this._connection.exchangeName, channelName, content);
-					resolve();
-				})
-				.catch((err) => {
-					reject(err);
-				});
+		return this.publishChannel.then((channel) => {
+			const content = new Buffer(JSON.stringify(data));
+			channel.publish(this._connection.exchangeName, channelName, content);
 		});
 	}
 }
