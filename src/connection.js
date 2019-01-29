@@ -81,17 +81,7 @@ class Connection extends EventEmitter {
 	}
 
 	newChannel () {
-		return new Promise((resolve, reject) => {
-			this.getConnection()
-				.then((conn) => {
-					conn.createChannel().then((channel) => {
-						return resolve(channel);
-					});
-				})
-				.catch((err) => {
-					return reject(err);
-				});
-		});
+		return this.getConnection().then((conn) => conn.createChannel());
 	}
 
 	getSubscribeChannel () {
@@ -99,7 +89,7 @@ class Connection extends EventEmitter {
 			return this.getSubscribeChannelPromise;
 		}
 
-		this.getSubscribeChannelPromise = this.newChannel((channel) => {
+		this.getSubscribeChannelPromise = this.newChannel().then((channel) => {
 			channel.on('error', (err) => {
 				this.log.error(`BK-PUBSUB - Subcribe channel error: ${err}`);
 				this.getSubscribeChannelPromise = null;
@@ -114,28 +104,23 @@ class Connection extends EventEmitter {
 	createExchange () {
 		if (this.createExchangePromise) {
 			return this.createExchangePromise;
-		} else {
-			this.createExchangePromise = new Promise((resolve, reject) => {
-				this.newChannel()
-					.then((channel) => {
-						this.log.info('BK-PUBSUB - Try to create exchange ' + this.exchangeName);
-						channel
-							.assertExchange(this.exchangeName, 'topic', {
-								durable: true,
-								autoDelete: false
-							})
-							.then(() => {
-								this.log.info('BK-PUBSUB - Successfuly create exchange ' + this.exchangeName);
-								channel.close();
-								return resolve();
-							});
-					})
-					.catch((err) => {
-						return reject(err);
-					});
-			});
-			return this.createExchangePromise;
 		}
+
+		return this.createExchangePromise = this.newChannel()
+			.then((channel) => {
+				this.log.info('BK-PUBSUB - Try to create exchange ' + this.exchangeName);
+				return Promise.all([
+					channel,
+					channel.assertExchange(this.exchangeName, 'topic', {
+						durable: true,
+						autoDelete: false
+					})
+				]);
+			})
+			.then(([channel]) => {
+				this.log.info('BK-PUBSUB - Successfuly create exchange ' + this.exchangeName);
+				channel.close();
+			});
 	}
 }
 
